@@ -127,22 +127,59 @@ class CommentService {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
+  // 批量构建 CommentVO 列表（优化性能）
+  async buildCommentVOList(comments) {
+    if (!comments || comments.length === 0) return [];
+
+    // 收集所有需要查询的用户ID
+    const userIds = new Set();
+    comments.forEach(c => {
+      const data = c.toJSON ? c.toJSON() : c;
+      if (data.userId) userIds.add(data.userId);
+      if (data.parentUserId) userIds.add(data.parentUserId);
+    });
+
+    // 批量查询所有用户
+    const users = await User.findAll({ where: { id: Array.from(userIds) } });
+    const userMap = new Map(users.map(u => [u.id, u]));
+
+    // 构建所有 CommentVO
+    return comments.map(comment => {
+      const commentVO = comment.toJSON ? comment.toJSON() : comment;
+      
+      // 获取用户信息
+      const user = userMap.get(commentVO.userId);
+      if (user) {
+        commentVO.avatar = user.avatar;
+        commentVO.username = user.username;
+      }
+      if (!commentVO.username) {
+        commentVO.username = '匿名用户';
+      }
+      
+      // 获取父评论用户名
+      if (commentVO.parentUserId) {
+        const parentUser = userMap.get(commentVO.parentUserId);
+        commentVO.parentUsername = parentUser ? parentUser.username : '匿名用户';
+      }
+      
+      // 格式化日期
+      if (commentVO.createTime || commentVO.create_time) {
+        commentVO.createTime = this.formatDateTime(commentVO.createTime || commentVO.create_time);
+      }
+      
+      return commentVO;
+    });
+  }
+
   // 查询评论列表
   async listComment(baseRequestVO) {
     try {
-      // 调试：打印参数
-      console.log('listComment service - baseRequestVO:', JSON.stringify(baseRequestVO));
-      
-      // 检查参数，source 和 commentType 是必需的
-      // source 可能为 0（树洞留言），所以不能直接用 !source 判断
       if (baseRequestVO.source === null || baseRequestVO.source === undefined) {
-        console.log('参数验证失败：source 为空');
         return PoetryResult.fail('参数错误！source 不能为空');
       }
       
-      // commentType 必须是非空字符串
       if (!baseRequestVO.commentType || typeof baseRequestVO.commentType !== 'string' || baseRequestVO.commentType.trim() === '') {
-        console.log('参数验证失败：commentType 为空，值:', baseRequestVO.commentType);
         return PoetryResult.fail('参数错误！commentType 不能为空');
       }
 
@@ -155,7 +192,6 @@ class CommentService {
       const pageSize = baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
 
-      let comments;
       if (!baseRequestVO.floorCommentId) {
         // 查询顶层评论
         where.parentCommentId = constants.FIRST_COMMENT;
@@ -167,51 +203,54 @@ class CommentService {
           order: [['create_time', 'ASC']]
         });
 
-        comments = rows;
-        
-        // 为每个顶层评论查询子评论
-        const commentVOList = [];
-        for (const comment of comments) {
-          const commentVO = await this.buildCommentVO(comment);
+        // 批量查询所有子评论
+        const floorIds = rows.map(r => r.id);
+        const childComments = floorIds.length > 0 ? await Comment.findAll({
+          where: {
+            source: baseRequestVO.source,
+            type: baseRequestVO.commentType,
+            floorCommentId: floorIds
+          },
+          order: [['create_time', 'ASC']]
+        }) : [];
+
+        // 按 floorCommentId 分组
+        const childMap = new Map();
+        childComments.forEach(c => {
+          const floorId = c.floorCommentId;
+          if (!childMap.has(floorId)) childMap.set(floorId, []);
+          childMap.get(floorId).push(c);
+        });
+
+        // 批量构建所有评论（包括父评论和子评论）
+        const allComments = [...rows, ...childComments];
+        const allCommentVOs = await this.buildCommentVOList(allComments);
+        const commentVOMap = new Map(allCommentVOs.map(vo => [vo.id, vo]));
+
+        // 组装结果
+        const commentVOList = rows.map(comment => {
+          const commentVO = commentVOMap.get(comment.id);
+          const children = (childMap.get(comment.id) || []).slice(0, 5);
+          const childVOs = children.map(c => commentVOMap.get(c.id));
           
-          // 查询该评论的子评论（最多5条）
-          const childComments = await Comment.findAll({
-            where: {
-              source: baseRequestVO.source,
-              type: baseRequestVO.commentType,
-              floorCommentId: comment.id
-            },
-            limit: 5,
-            order: [['create_time', 'ASC']]
-          });
-          
-          const childCommentVOList = [];
-          for (const childComment of childComments) {
-            const childVO = await this.buildCommentVO(childComment);
-            childCommentVOList.push(childVO);
-          }
-          
-          // 构建分页对象（原版使用 Page 对象）
           commentVO.childComments = {
-            records: childCommentVOList,
-            total: childCommentVOList.length,
+            records: childVOs,
+            total: childVOs.length,
             size: 5,
             current: 1,
-            pages: Math.ceil(childCommentVOList.length / 5)
+            pages: Math.ceil(childVOs.length / 5)
           };
           
-          commentVOList.push(commentVO);
-        }
+          return commentVO;
+        });
         
-        const result = {
+        return PoetryResult.success({
           records: commentVOList,
           total: count,
           size: pageSize,
           current: page,
           pages: Math.ceil(count / pageSize)
-        };
-        
-        return PoetryResult.success(result);
+        });
       } else {
         // 查询指定楼层评论的子评论
         where.floorCommentId = baseRequestVO.floorCommentId;
@@ -223,21 +262,15 @@ class CommentService {
           order: [['create_time', 'ASC']]
         });
         
-        const commentVOList = [];
-        for (const comment of rows) {
-          const commentVO = await this.buildCommentVO(comment);
-          commentVOList.push(commentVO);
-        }
+        const commentVOList = await this.buildCommentVOList(rows);
         
-        const result = {
+        return PoetryResult.success({
           records: commentVOList,
           total: count,
           size: pageSize,
           current: page,
           pages: Math.ceil(count / pageSize)
-        };
-        
-        return PoetryResult.success(result);
+        });
       }
     } catch (error) {
       console.error('List comment error:', error);

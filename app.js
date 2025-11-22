@@ -25,7 +25,7 @@ const webInfoRoutes = require('./routes/webInfo');
 const adminRoutes = require('./routes/admin');
 
 const app = express();
-const PORT = process.env.PORT || 8081;
+const PORT = process.env.PORT || 8080;
 
 // 中间件
 app.use(cors);

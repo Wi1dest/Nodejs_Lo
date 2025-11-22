@@ -164,13 +164,8 @@ class ArticleService {
         order: [['create_time', 'DESC']]
       });
 
-      // 构建完整的 ArticleVO 列表（优化：一次查询 sortInfo）
-      const sortInfo = await this.getSortInfoData();
-      const articleVOList = [];
-      for (const article of rows) {
-        const articleVO = await this.buildArticleVO(article, false, sortInfo);
-        articleVOList.push(articleVO);
-      }
+      // 批量构建 ArticleVO 列表
+      const articleVOList = await this.buildArticleVOList(rows, false);
 
       const result = {
         records: articleVOList,
@@ -202,6 +197,119 @@ class ArticleService {
     const minutes = String(beijingTime.getMinutes()).padStart(2, '0');
     const seconds = String(beijingTime.getSeconds()).padStart(2, '0');
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
+  // 批量构建 ArticleVO 列表（优化性能）
+  async buildArticleVOList(articles, isAdmin = false) {
+    if (!articles || articles.length === 0) return [];
+
+    // 收集所有需要查询的ID
+    const userIds = [...new Set(articles.map(a => (a.toJSON ? a.toJSON() : a).userId))];
+    const sortIds = [...new Set(articles.map(a => (a.toJSON ? a.toJSON() : a).sortId).filter(Boolean))];
+    const labelIds = [...new Set(articles.map(a => (a.toJSON ? a.toJSON() : a).labelId).filter(Boolean))];
+    const articleIds = articles.map(a => (a.toJSON ? a.toJSON() : a).id);
+
+    // 批量查询所有数据
+    const [users, sorts, labels, commentCounts] = await Promise.all([
+      User.findAll({ where: { id: userIds } }),
+      sortIds.length > 0 ? Sort.findAll({ where: { id: sortIds } }) : [],
+      labelIds.length > 0 ? Label.findAll({ where: { id: labelIds } }) : [],
+      Comment.findAll({
+        where: { source: articleIds, type: 'article' },
+        attributes: ['source', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+        group: ['source'],
+        raw: true
+      })
+    ]);
+
+    // 批量统计 Sort 和 Label 的文章数
+    const [sortCounts, labelCounts] = await Promise.all([
+      sortIds.length > 0 ? Article.findAll({
+        where: { sortId: sortIds, deleted: false },
+        attributes: ['sortId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+        group: ['sortId'],
+        raw: true
+      }) : [],
+      labelIds.length > 0 ? Article.findAll({
+        where: { labelId: labelIds, deleted: false },
+        attributes: ['labelId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+        group: ['labelId'],
+        raw: true
+      }) : []
+    ]);
+
+    // 转换为 Map 以便快速查找
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const sortMap = new Map(sorts.map(s => [s.id, s]));
+    const labelMap = new Map(labels.map(l => [l.id, l]));
+    const commentCountMap = new Map(commentCounts.map(c => [c.source, parseInt(c.count)]));
+    const sortCountMap = new Map(sortCounts.map(s => [s.sortId, parseInt(s.count)]));
+    const labelCountMap = new Map(labelCounts.map(l => [l.labelId, parseInt(l.count)]));
+
+    // 构建所有 ArticleVO
+    return articles.map(article => {
+      const articleData = article.toJSON ? article.toJSON() : article;
+      
+      const articleVO = {
+        id: articleData.id,
+        userId: articleData.userId,
+        articleCover: articleData.articleCover,
+        articleTitle: articleData.articleTitle,
+        articleContent: articleData.articleContent,
+        viewCount: articleData.viewCount,
+        likeCount: articleData.likeCount,
+        commentStatus: articleData.commentStatus,
+        recommendStatus: articleData.recommendStatus,
+        videoUrl: articleData.videoUrl || null,
+        password: articleData.password || null,
+        tips: articleData.tips || null,
+        viewStatus: articleData.viewStatus,
+        createTime: this.formatDateTime(articleData.createTime || articleData.create_time),
+        updateTime: this.formatDateTime(articleData.updateTime || articleData.update_time),
+        updateBy: articleData.updateBy || null,
+        sortId: articleData.sortId,
+        labelId: articleData.labelId
+      };
+
+      // 截取内容
+      if (isAdmin && articleVO.articleContent && articleVO.articleContent.length > constants.SUMMARY) {
+        articleVO.articleContent = articleVO.articleContent
+          .substring(0, constants.SUMMARY)
+          .replace(/`/g, '')
+          .replace(/#/g, '')
+          .replace(/>/g, '');
+      }
+
+      // 设置用户名
+      const user = userMap.get(articleVO.userId);
+      articleVO.username = user ? user.username : null;
+
+      // 设置评论数
+      articleVO.commentCount = articleVO.commentStatus ? (commentCountMap.get(articleVO.id) || 0) : 0;
+
+      // 设置 Sort 信息
+      if (articleVO.sortId) {
+        const sort = sortMap.get(articleVO.sortId);
+        if (sort) {
+          const sortData = sort.toJSON ? sort.toJSON() : sort;
+          sortData.countOfSort = sortCountMap.get(articleVO.sortId) || 0;
+          sortData.labels = null;
+          articleVO.sort = sortData;
+        }
+      }
+
+      // 设置 Label 信息
+      if (articleVO.labelId) {
+        const label = labelMap.get(articleVO.labelId);
+        if (label) {
+          const labelData = label.toJSON ? label.toJSON() : label;
+          labelData.countOfLabel = labelCountMap.get(articleVO.labelId) || 0;
+          articleVO.label = labelData;
+        }
+      }
+
+      return articleVO;
+    });
   }
 
   // 构建 ArticleVO（按照原版Java的buildArticleVO方法）
@@ -326,12 +434,8 @@ class ArticleService {
         });
 
         if (articles && articles.length > 0) {
-          const sortInfo = await this.getSortInfoData();
-          const articleVOList = [];
-          for (const article of articles) {
-            const articleVO = await this.buildArticleVO(article, false, sortInfo);
-            articleVOList.push(articleVO);
-          }
+          // 批量构建 ArticleVO
+          const articleVOList = await this.buildArticleVOList(articles, false);
           result[sort.id] = articleVOList;
         }
       }

@@ -97,58 +97,8 @@ class WebInfoService {
   // 获取分类标签信息
   async getSortInfo() {
     try {
-      const sorts = await Sort.findAll({
-        order: [['priority', 'ASC'], ['id', 'ASC']]
-      });
-      
-      if (sorts && sorts.length > 0) {
-        const result = [];
-        
-        for (const sort of sorts) {
-          const sortData = sort.toJSON();
-          
-          // 统计该分类下的文章数量
-          const articleCount = await Article.count({
-            where: {
-              sortId: sort.id,
-              deleted: false
-            }
-          });
-          sortData.countOfSort = articleCount;
-          
-          // 查询该分类下的所有标签
-          const labels = await Label.findAll({
-            where: {
-              sortId: sort.id
-            }
-          });
-          
-          if (labels && labels.length > 0) {
-            const labelsWithCount = [];
-            for (const label of labels) {
-              const labelData = label.toJSON();
-              
-              // 统计该标签下的文章数量
-              const labelArticleCount = await Article.count({
-                where: {
-                  labelId: label.id,
-                  deleted: false
-                }
-              });
-              labelData.countOfLabel = labelArticleCount;
-              
-              labelsWithCount.push(labelData);
-            }
-            sortData.labels = labelsWithCount;
-          }
-          
-          result.push(sortData);
-        }
-        
-        return PoetryResult.success(result);
-      }
-      
-      return PoetryResult.success([]);
+      const result = await this.getSortInfoData();
+      return PoetryResult.success(result);
     } catch (error) {
       console.error('Get sort info error:', error);
       return PoetryResult.fail('查询失败：' + error.message);
@@ -351,41 +301,30 @@ class WebInfoService {
       const ipSetYest = new Set(yesterdayResults.map(r => r.ip).filter(Boolean));
       result.ip_count_yest = ipSetYest.size;
 
+      // 批量查询所有用户
+      const allUserIds = new Set();
+      yesterdayResults.forEach(r => { if (r.userId) allUserIds.add(r.userId); });
+      todayResults.forEach(r => { if (r.userId) allUserIds.add(r.userId); });
+
+      const users = allUserIds.size > 0 ? await User.findAll({
+        where: { id: Array.from(allUserIds) }
+      }) : [];
+      const userMap = new Map(users.map(u => {
+        const userData = u.toJSON();
+        return [u.id, { avatar: userData.avatar || null, username: userData.username || null }];
+      }));
+
       // 昨天的用户
-      const userMapYest = new Map();
-      for (const item of yesterdayResults) {
-        if (item.userId && !userMapYest.has(item.userId)) {
-          const user = await User.findByPk(item.userId);
-          if (user) {
-            const userData = user.toJSON();
-            userMapYest.set(item.userId, {
-              avatar: userData.avatar || null,
-              username: userData.username || null
-            });
-          }
-        }
-      }
-      result.username_yest = Array.from(userMapYest.values());
+      const userSetYest = new Set(yesterdayResults.map(r => r.userId).filter(Boolean));
+      result.username_yest = Array.from(userSetYest).map(id => userMap.get(id)).filter(Boolean);
 
       // 今天的IP数量
       const ipSetToday = new Set(todayResults.map(r => r.ip).filter(Boolean));
       result.ip_count_today = ipSetToday.size;
 
       // 今天的用户
-      const userMapToday = new Map();
-      for (const item of todayResults) {
-        if (item.userId && !userMapToday.has(item.userId)) {
-          const user = await User.findByPk(item.userId);
-          if (user) {
-            const userData = user.toJSON();
-            userMapToday.set(item.userId, {
-              avatar: userData.avatar || null,
-              username: userData.username || null
-            });
-          }
-        }
-      }
-      result.username_today = Array.from(userMapToday.values());
+      const userSetToday = new Set(todayResults.map(r => r.userId).filter(Boolean));
+      result.username_today = Array.from(userSetToday).map(id => userMap.get(id)).filter(Boolean);
 
       // 今天的省份统计
       const provinceTodayMap = new Map();
@@ -602,56 +541,54 @@ class WebInfoService {
         order: [['priority', 'ASC'], ['id', 'ASC']]
       });
 
-      if (sorts && sorts.length > 0) {
-        const result = [];
+      if (!sorts || sorts.length === 0) return [];
 
-        for (const sort of sorts) {
-          const sortData = sort.toJSON ? sort.toJSON() : sort;
+      const sortIds = sorts.map(s => s.id);
 
-          // 统计该分类下的文章数量
-          const articleCount = await Article.count({
-            where: {
-              sortId: sort.id,
-              deleted: false
-            }
-          });
-          sortData.countOfSort = articleCount;
+      // 批量查询所有标签
+      const labels = await Label.findAll({
+        where: { sortId: sortIds }
+      });
 
-          // 查询该分类下的所有标签
-          const labels = await Label.findAll({
-            where: {
-              sortId: sort.id
-            }
-          });
+      const labelIds = labels.map(l => l.id);
 
-          if (labels && labels.length > 0) {
-            const labelsWithCount = [];
-            for (const label of labels) {
-              const labelData = label.toJSON ? label.toJSON() : label;
+      // 批量统计文章数
+      const [sortCounts, labelCounts] = await Promise.all([
+        Article.findAll({
+          where: { sortId: sortIds, deleted: false },
+          attributes: ['sortId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+          group: ['sortId'],
+          raw: true
+        }),
+        labelIds.length > 0 ? Article.findAll({
+          where: { labelId: labelIds, deleted: false },
+          attributes: ['labelId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+          group: ['labelId'],
+          raw: true
+        }) : []
+      ]);
 
-              // 统计该标签下的文章数量
-              const labelArticleCount = await Article.count({
-                where: {
-                  labelId: label.id,
-                  deleted: false
-                }
-              });
-              labelData.countOfLabel = labelArticleCount;
+      // 转换为 Map
+      const sortCountMap = new Map(sortCounts.map(s => [s.sortId, parseInt(s.count)]));
+      const labelCountMap = new Map(labelCounts.map(l => [l.labelId, parseInt(l.count)]));
 
-              labelsWithCount.push(labelData);
-            }
-            sortData.labels = labelsWithCount;
-          } else {
-            sortData.labels = [];
-          }
+      // 按 sortId 分组 labels
+      const labelsBySortId = new Map();
+      labels.forEach(label => {
+        const sortId = label.sortId;
+        if (!labelsBySortId.has(sortId)) labelsBySortId.set(sortId, []);
+        const labelData = label.toJSON ? label.toJSON() : label;
+        labelData.countOfLabel = labelCountMap.get(label.id) || 0;
+        labelsBySortId.get(sortId).push(labelData);
+      });
 
-          result.push(sortData);
-        }
-
-        return result;
-      }
-
-      return [];
+      // 组装结果
+      return sorts.map(sort => {
+        const sortData = sort.toJSON ? sort.toJSON() : sort;
+        sortData.countOfSort = sortCountMap.get(sort.id) || 0;
+        sortData.labels = labelsBySortId.get(sort.id) || [];
+        return sortData;
+      });
     } catch (error) {
       console.error('Get sort info data error:', error);
       return [];
