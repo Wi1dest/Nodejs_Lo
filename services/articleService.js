@@ -498,9 +498,11 @@ class ArticleService {
   // 管理员查询文章列表
   async listAdminArticle(baseRequestVO, isBoss, userId = null) {
     try {
-      const page = baseRequestVO.page || 1;
-      const pageSize = baseRequestVO.pageSize || 10;
+      const page = baseRequestVO.current || baseRequestVO.page || 1;
+      const pageSize = baseRequestVO.size || baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
+      
+      console.log('listAdminArticle - page:', page, 'pageSize:', pageSize, 'offset:', offset, 'baseRequestVO:', JSON.stringify(baseRequestVO));
 
       const where = {
         deleted: false
