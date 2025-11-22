@@ -538,15 +538,10 @@ class ArticleService {
         order: [['create_time', 'DESC']]
       });
 
-      // 构建文章VO列表
-      const records = [];
-      for (const article of rows) {
-        // 确保 article 是纯对象
-        const articleData = article.toJSON ? article.toJSON() : article;
-        const articleVO = await this.buildArticleVO(articleData);
-        articleVO.password = null; // 管理界面不返回密码
-        records.push(articleVO);
-      }
+      // 批量构建文章VO列表
+      const records = await this.buildArticleVOList(rows, true);
+      // 管理界面不返回密码
+      records.forEach(r => r.password = null);
 
       const result = {
         records: records,

@@ -6,11 +6,13 @@
 - ✅ 添加 `buildArticleVOList()` 批量构建方法
 - ✅ 优化 `listArticle()` 使用批量查询
 - ✅ 优化 `listSortArticle()` 使用批量查询
+- ✅ 优化 `listAdminArticle()` 使用批量查询
 - ✅ 使用 SQL GROUP BY 批量统计文章数
 
 **优化效果：**
 - 10篇文章：240次查询 → 6次查询（**40倍提升**）
 - 18篇文章：432次查询 → 18次查询（**24倍提升**）
+- Admin接口：60次查询 → 6次查询（**10倍提升**）
 
 ### 2. commentService.js
 - ✅ 添加 `buildCommentVOList()` 批量构建方法
@@ -79,6 +81,8 @@
 | listSortArticle (18篇) | 432次 | 18次 | 24倍 | 24s → 1s |
 | listComment (10条) | 130次 | 5次 | 26倍 | 7s → 0.27s |
 | getSortInfo | 18次 | 2次 | 9倍 | 1s → 0.11s |
+| **admin/article/boss/list** | **60次** | **6次** | **10倍** | **34s → 2s** |
+| **admin/article/user/list** | **60次** | **6次** | **10倍** | **30s → 2s** |
 
 ---
 
