@@ -188,8 +188,8 @@ class CommentService {
         type: baseRequestVO.commentType
       };
 
-      const page = baseRequestVO.page || 1;
-      const pageSize = baseRequestVO.pageSize || 10;
+      const page = baseRequestVO.current || baseRequestVO.page || 1;
+      const pageSize = baseRequestVO.size || baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
 
       if (!baseRequestVO.floorCommentId) {
@@ -280,8 +280,8 @@ class CommentService {
   // 管理员查询评论列表
   async listAdminComment(baseRequestVO, isBoss, req = null) {
     try {
-      const page = baseRequestVO.page || 1;
-      const pageSize = baseRequestVO.pageSize || 10;
+      const page = baseRequestVO.current || baseRequestVO.page || 1;
+      const pageSize = baseRequestVO.size || baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
 
       const where = {};

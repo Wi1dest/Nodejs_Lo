@@ -355,8 +355,8 @@ class UserService {
   // 管理员查询用户列表
   async listUser(baseRequestVO) {
     try {
-      const page = baseRequestVO.page || 1;
-      const pageSize = baseRequestVO.pageSize || 10;
+      const page = baseRequestVO.current || baseRequestVO.page || 1;
+      const pageSize = baseRequestVO.size || baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
 
       const where = {

@@ -127,8 +127,8 @@ class ArticleService {
   // 查询文章列表
   async listArticle(baseRequestVO) {
     try {
-      const page = baseRequestVO.page || 1;
-      const pageSize = baseRequestVO.pageSize || 10;
+      const page = baseRequestVO.current || baseRequestVO.page || 1;
+      const pageSize = baseRequestVO.size || baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
 
       const where = {

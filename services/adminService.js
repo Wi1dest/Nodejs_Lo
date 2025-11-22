@@ -232,8 +232,8 @@ class AdminService {
   // Boss查询树洞
   async listBossTreeHole(baseRequestVO) {
     try {
-      const page = baseRequestVO.page || 1;
-      const pageSize = baseRequestVO.pageSize || 10;
+      const page = baseRequestVO.current || baseRequestVO.page || 1;
+      const pageSize = baseRequestVO.size || baseRequestVO.pageSize || 10;
       const offset = (page - 1) * pageSize;
 
       const { count, rows } = await TreeHole.findAndCountAll({
