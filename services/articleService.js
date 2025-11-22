@@ -590,56 +590,54 @@ class ArticleService {
         order: [['priority', 'ASC'], ['id', 'ASC']]
       });
 
-      if (sorts && sorts.length > 0) {
-        const result = [];
+      if (!sorts || sorts.length === 0) return [];
 
-        for (const sort of sorts) {
-          const sortData = sort.toJSON();
+      const sortIds = sorts.map(s => s.id);
 
-          // 统计该分类下的文章数量
-          const articleCount = await Article.count({
-            where: {
-              sortId: sort.id,
-              deleted: false
-            }
-          });
-          sortData.countOfSort = articleCount;
+      // 批量查询所有标签
+      const labels = await Label.findAll({
+        where: { sortId: sortIds }
+      });
 
-          // 查询该分类下的所有标签
-          const labels = await Label.findAll({
-            where: {
-              sortId: sort.id
-            }
-          });
+      const labelIds = labels.map(l => l.id);
 
-          if (labels && labels.length > 0) {
-            const labelsWithCount = [];
-            for (const label of labels) {
-              const labelData = label.toJSON();
+      // 批量统计文章数
+      const [sortCounts, labelCounts] = await Promise.all([
+        Article.findAll({
+          where: { sortId: sortIds, deleted: false },
+          attributes: ['sortId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+          group: ['sortId'],
+          raw: true
+        }),
+        labelIds.length > 0 ? Article.findAll({
+          where: { labelId: labelIds, deleted: false },
+          attributes: ['labelId', [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']],
+          group: ['labelId'],
+          raw: true
+        }) : []
+      ]);
 
-              // 统计该标签下的文章数量
-              const labelArticleCount = await Article.count({
-                where: {
-                  labelId: label.id,
-                  deleted: false
-                }
-              });
-              labelData.countOfLabel = labelArticleCount;
+      // 转换为 Map
+      const sortCountMap = new Map(sortCounts.map(s => [s.sortId, parseInt(s.count)]));
+      const labelCountMap = new Map(labelCounts.map(l => [l.labelId, parseInt(l.count)]));
 
-              labelsWithCount.push(labelData);
-            }
-            sortData.labels = labelsWithCount;
-          } else {
-            sortData.labels = [];
-          }
+      // 按 sortId 分组 labels
+      const labelsBySortId = new Map();
+      labels.forEach(label => {
+        const sortId = label.sortId;
+        if (!labelsBySortId.has(sortId)) labelsBySortId.set(sortId, []);
+        const labelData = label.toJSON ? label.toJSON() : label;
+        labelData.countOfLabel = labelCountMap.get(label.id) || 0;
+        labelsBySortId.get(sortId).push(labelData);
+      });
 
-          result.push(sortData);
-        }
-
-        return result;
-      }
-
-      return [];
+      // 组装结果
+      return sorts.map(sort => {
+        const sortData = sort.toJSON ? sort.toJSON() : sort;
+        sortData.countOfSort = sortCountMap.get(sort.id) || 0;
+        sortData.labels = labelsBySortId.get(sort.id) || [];
+        return sortData;
+      });
     } catch (error) {
       console.error('Get sort info data error:', error);
       return [];
